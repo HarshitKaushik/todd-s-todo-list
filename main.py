@@ -175,7 +175,7 @@ async def get_task_progress(task_id: int, db: Session = Depends(get_db)):
 
   subtasks = db.query(TaskModel).filter(TaskModel.parent_id == task_id).all()
 
-  if not subtasks:  # If no subtasks, determine completion based on some status
+  if not subtasks:
     # If the task has an end_date, it's considered complete (100%), otherwise (0%)
     if task.end_date:
       return {"progress": 100}
