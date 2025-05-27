@@ -46,6 +46,11 @@ async def read_task(task_id: int, db: Session = Depends(get_db)):
   if task is None:
     raise HTTPException(status_code=404, detail="Task not found")
   
+  # Convert naive date to timezone-aware datetime
+  if task.end_date:
+    from datetime import datetime, timezone
+    task.end_date = datetime.combine(task.end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+  
   return Task.model_validate(task)
 
 
@@ -75,16 +80,19 @@ async def update_task(
 async def delete_task(task_id: int, db: Session = Depends(get_db)):
 
   task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
-  subtasks = db.query(TaskModel).filter(TaskModel.parent_id == task_id).all()
-
+  
   if task is None:
     raise HTTPException(status_code=404, detail="Task not found")
+    
+  # Get all subtasks first before marking them as deleted
+  subtasks = db.query(TaskModel).filter(TaskModel.parent_id == task_id).all()
   
-  task.end_date = date.today()
+  from datetime import datetime, timezone
+  task.end_date = datetime.now(timezone.utc)
   
   if subtasks:
     for subtask in subtasks:
-      subtask.end_date = date.today()
+      subtask.end_date = datetime.now(timezone.utc)
 
   db.commit()
   
@@ -95,6 +103,13 @@ async def delete_task(task_id: int, db: Session = Depends(get_db)):
 async def read_all_tasks(db: Session = Depends(get_db)):
     
   tasks = db.query(TaskModel).all()
+  
+  # Convert naive dates to timezone-aware datetimes
+  from datetime import datetime, timezone
+  for task in tasks:
+      if task.end_date:
+          task.end_date = datetime.combine(task.end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+  
   return [Task.model_validate(task) for task in tasks]
 
 
@@ -126,7 +141,19 @@ async def create_subtask(
 # Get all the subtasks
 @app.get("/task/{task_id}/subtasks", response_model=list[Task])
 async def read_subtasks(task_id: int, db: Session = Depends(get_db)):
+  parent_task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+  
+  if parent_task is None:
+    raise HTTPException(status_code=404, detail="Task not found")
+  
   subtasks = db.query(TaskModel).filter(TaskModel.parent_id == task_id).all()
+  
+  # Convert naive dates to timezone-aware datetimes
+  from datetime import datetime, timezone
+  for subtask in subtasks:
+      if subtask.end_date:
+          subtask.end_date = datetime.combine(subtask.end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+  
   return [Task.model_validate(subtask) for subtask in subtasks]
 
 
@@ -159,10 +186,26 @@ async def delete_subtask(subtask_id: int, db: Session = Depends(get_db)):
   if subtask is None:
     raise HTTPException(status_code=404, detail="Subtask not found")
   
-  subtask.end_date = date.today()
+  from datetime import datetime, timezone
+  subtask.end_date = datetime.now(timezone.utc)
   db.commit()
 
   return {"detail": "Subtask deleted successfully"}
+
+
+@app.get("/subtask/{subtask_id}", response_model=Task)
+async def get_subtask(subtask_id: int, db: Session = Depends(get_db)):
+    subtask = db.query(TaskModel).filter(TaskModel.id == subtask_id, TaskModel.parent_id != None).first()
+    
+    if subtask is None:
+        raise HTTPException(status_code=404, detail="Subtask not found")
+    
+    # Convert naive date to timezone-aware datetime
+    if subtask.end_date:
+        from datetime import datetime, timezone
+        subtask.end_date = datetime.combine(subtask.end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    
+    return Task.model_validate(subtask)
 
 
 @app.get("/task/{task_id}/progress")
@@ -177,14 +220,14 @@ async def get_task_progress(task_id: int, db: Session = Depends(get_db)):
 
   if not subtasks:
     # If the task has an end_date, it's considered complete (100%), otherwise (0%)
-    if task.end_date:
+    if task.status == True:
       return {"progress": 100}
     else:
       return {"progress": 0}
 
   else:
     total_subtasks = len(subtasks)
-    completed_subtasks = sum(1 for subtask in subtasks if subtask.end_date is not None)
+    completed_subtasks = sum(1 for subtask in subtasks if subtask.status == True)
 
     progress_percentage = (completed_subtasks / total_subtasks) * 100
     return {"progress": progress_percentage}
